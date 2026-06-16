@@ -25,6 +25,42 @@ archive stream, usually long
 - `README.md` — user-facing usage.
 - `AGENTS.md` — agent quickstart and invariants.
 
+## Host log delivery dependency
+
+The preset rules depend on Linux and Windows logs being delivered and parsed by:
+
+```text
+https://github.com/joe-speedboat/ansible.log_forwarder
+```
+
+This repository starts at the Graylog pipeline layer. It does not configure OS-side collection. The expected end-to-end wiring is:
+
+```text
+Linux/Windows host
+  -> ansible.log_forwarder-managed log shipper/parser
+  -> Graylog input, normally landing in Default Stream
+  -> audit2archive pipeline rules
+  -> long/archive stream
+```
+
+Before changing a rule because a message did not archive, verify the upstream delivery first:
+
+1. Does the host have the log-forwarder role installed and running?
+2. Does Graylog receive the raw event in the source stream?
+3. Are the expected parsed fields present?
+4. Does the field value match the rule condition exactly?
+
+Field expectations from the current preset:
+
+| Rule family | Depends on fields from log forwarding/parsing |
+|---|---|
+| Linux auth | `auth_service`, `auth_session_state`, `auth_result`, `auth_user`, `sudo_command`, raw PAM text in `message` |
+| Linux packages | `log_type=auditd`, `audit_type`, `package_action`, `package_name`, `process_comm`, raw `EXECVE` text in `message` |
+| Linux users/groups | `log_type`, `audit_type`, selected journald/auditd text in `message` |
+| Windows | `winlog_event_id`, `winlog_provider_name`, `winlog_event_data_*` |
+
+If another collector is used, make it emit compatible fields or adjust and retest the preset.
+
 ## Rule naming
 
 Rule names are stable identities. Do not rename a rule unless you intentionally want a new Graylog rule object and new `pr` value.

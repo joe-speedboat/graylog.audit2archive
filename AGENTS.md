@@ -21,8 +21,26 @@ The core deliverables are:
 4. **Preserve `pr` field tagging.** Every rule should set `pr` to its rule name before routing.
 5. **Keep archive routing explicit.** Archive rules should route with `remove_from_default: true` unless a change explicitly documents otherwise.
 6. **Run pipelines on the source stream.** Usually this is `Default Stream`, not the archive/target stream.
-7. **Preset stream/input names are portable.** Use `{{ streams.target.id }}` and `{{ inputs.<alias>.id }}` placeholders in rules; the importer resolves names to IDs at apply time.
-8. **Exact stage semantics.** The preset describes the desired active stage membership. Unlisted old rules may remain as inactive objects but should not remain in the active stage.
+7. **Host log delivery is external.** Linux and Windows hosts must deliver logs with `https://github.com/joe-speedboat/ansible.log_forwarder` or an equivalent forwarder/parser that emits compatible fields.
+8. **Preset stream/input names are portable.** Use `{{ streams.target.id }}` and `{{ inputs.<alias>.id }}` placeholders in rules; the importer resolves names to IDs at apply time.
+9. **Exact stage semantics.** The preset describes the desired active stage membership. Unlisted old rules may remain as inactive objects but should not remain in the active stage.
+
+## How this repository is wired
+
+```text
+Linux/Windows hosts
+  -> joe-speedboat/ansible.log_forwarder
+  -> Graylog input / Default Stream
+  -> tier-long-routing pipeline deployed from preset/audit2archive-preset.yaml
+  -> archive stream, for example long
+```
+
+This repository does not install host agents. It only exports/imports the Graylog pipeline and rule layer. The current preset expects the parsed fields produced by `ansible.log_forwarder`:
+
+- Linux examples: `auth_service`, `auth_session_state`, `auth_result`, `sudo_command`, `log_type`, `audit_type`, `package_action`, `package_name`.
+- Windows examples: `winlog_event_id`, `winlog_provider_name`, `winlog_event_data_*`.
+
+If a rule is not matching, first verify that the sending host is managed by `ansible.log_forwarder` and that the expected parsed fields exist in Graylog before changing the archive rule.
 
 ## Fast setup
 

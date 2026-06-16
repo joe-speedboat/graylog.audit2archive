@@ -1,4 +1,8 @@
 version: 1
+metadata:
+  description: Audit-to-archive Graylog pipeline preset.
+  log_delivery_dependency: https://github.com/joe-speedboat/ansible.log_forwarder
+  note: Linux and Windows rules depend on parsed fields produced by the log forwarder role or an equivalent compatible parser.
 graylog:
   api_uri: https://graylog.example.com/api
   verify_tls: false

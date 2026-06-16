@@ -1,0 +1,339 @@
+version: 1
+graylog:
+  api_uri: https://graylog.example.com/api
+  verify_tls: false
+  timeout: 30
+auth:
+  mode: token
+  token_env: GRAYLOG_TOKEN
+streams:
+  source:
+    name: Default Stream
+  target:
+    name: long
+pipeline:
+  name: tier-long-routing
+  description: Long retention allowlist only
+  stage: 0
+  match: EITHER
+  stage_policy: exact
+routing:
+  remove_from_default: true
+  pr_field: pr
+inputs: {}
+rules:
+- name: linux_ssh
+  description: 'Long retention allowlist: linux_ssh'
+  source: |-
+    rule "linux_ssh"
+    when
+      (
+        has_field("auth_service") &&
+        to_string($message.auth_service) == "sshd" &&
+        has_field("auth_session_state")
+      ) || (
+        has_field("auth_result") &&
+        to_string($message.auth_result) == "Failed" &&
+        has_field("auth_user")
+      )
+    then
+      set_field("pr", "linux_ssh");
+      route_to_stream(id:"{{ streams.target.id }}", remove_from_default: true);
+    end
+- name: linux_sudo
+  description: 'Long retention allowlist: linux_sudo'
+  source: |-
+    rule "linux_sudo"
+    when
+      has_field("sudo_command") ||
+      contains(to_string($message.message), "pam_unix(sudo:auth): authentication failure")
+    then
+      set_field("pr", "linux_sudo");
+      route_to_stream(id:"{{ streams.target.id }}", remove_from_default: true);
+    end
+- name: linux_su
+  description: 'Long retention allowlist: linux_su'
+  source: |-
+    rule "linux_su"
+    when
+      (
+        has_field("auth_service") &&
+        (to_string($message.auth_service) == "su" || starts_with(to_string($message.auth_service), "su-")) &&
+        has_field("auth_session_state")
+      ) || contains(to_string($message.message), "pam_unix(su:auth): authentication failure")
+    then
+      set_field("pr", "linux_su");
+      route_to_stream(id:"{{ streams.target.id }}", remove_from_default: true);
+    end
+- name: linux_pkg
+  description: 'Long retention allowlist: linux_pkg'
+  source: |-
+    rule "linux_pkg"
+    when
+      has_field("log_type") &&
+      to_string($message.log_type) == "auditd" &&
+      (
+        (
+          has_field("package_action") &&
+          (
+            to_string($message.audit_type) == "SOFTWARE_UPDATE" ||
+            to_string($message.package_action) == "install" ||
+            to_string($message.package_action) == "remove" ||
+            to_string($message.package_action) == "update" ||
+            to_string($message.package_action) == "upgrade"
+          )
+        ) || (
+          to_string($message.audit_type) == "EXECVE" &&
+          contains(to_string($message.message), "argc=") &&
+          (contains(to_string($message.message), "apt-get") || contains(to_string($message.message), "apt")) &&
+          (
+            contains(to_string($message.message), "install") ||
+            contains(to_string($message.message), "remove") ||
+            contains(to_string($message.message), "update") ||
+            contains(to_string($message.message), "upgrade")
+          )
+        ) || (
+          to_string($message.audit_type) == "EXECVE" &&
+          contains(to_string($message.message), "argc=") &&
+          contains(to_string($message.message), "dpkg") &&
+          (
+            contains(to_string($message.message), "-i") ||
+            contains(to_string($message.message), "--install") ||
+            contains(to_string($message.message), "-r") ||
+            contains(to_string($message.message), "--remove") ||
+            contains(to_string($message.message), "-P") ||
+            contains(to_string($message.message), "--purge")
+          )
+        )
+      )
+    then
+      set_field("pr", "linux_pkg");
+      route_to_stream(id:"{{ streams.target.id }}", remove_from_default: true);
+    end
+- name: linux_user
+  description: 'Long retention allowlist: linux_user'
+  source: |-
+    rule "linux_user"
+    when
+      (
+        has_field("log_type") &&
+        to_string($message.log_type) == "journald" &&
+        (
+          contains(to_string($message.message), "new user: name=") ||
+          contains(to_string($message.message), "delete user '")
+        )
+      ) || (
+        has_field("log_type") &&
+        to_string($message.log_type) == "auditd" &&
+        contains(to_string($message.message), "res=success") &&
+        (to_string($message.audit_type) == "USER_CHAUTHTOK" || to_string($message.audit_type) == "USER_MGMT") &&
+        contains(to_string($message.message), "usermod")
+      )
+    then
+      set_field("pr", "linux_user");
+      route_to_stream(id:"{{ streams.target.id }}", remove_from_default: true);
+    end
+- name: linux_group
+  description: 'Long retention allowlist: linux_group'
+  source: |-
+    rule "linux_group"
+    when
+      (
+        has_field("log_type") &&
+        to_string($message.log_type) == "auditd" &&
+        contains(to_string($message.message), "res=success") &&
+        (
+          (to_string($message.audit_type) == "ADD_GROUP" && contains(to_string($message.message), "groupadd") && (contains(to_string($message.message), "op= id=") || contains(to_string($message.message), "op=add-group"))) ||
+          ((to_string($message.audit_type) == "GRP_MGMT" || to_string($message.audit_type) == "USER_ACCT") && contains(to_string($message.message), "groupmod") && (contains(to_string($message.message), "op=modifying group") || contains(to_string($message.message), "op=modify-group")))
+        )
+      ) || (
+        has_field("log_type") &&
+        to_string($message.log_type) == "journald" &&
+        contains(to_string($message.message), "group '") &&
+        contains(to_string($message.message), "' removed") &&
+        !contains(to_string($message.message), "from /etc/") &&
+        !contains(to_string($message.message), "owned by")
+      )
+    then
+      set_field("pr", "linux_group");
+      route_to_stream(id:"{{ streams.target.id }}", remove_from_default: true);
+    end
+- name: win_logon_failure
+  description: 'Long retention allowlist: win_logon_failure'
+  source: |-
+    rule "win_logon_failure"
+    when
+      has_field("winlog_event_id") && has_field("winlog_provider_name") && to_string($message.winlog_provider_name) == "Microsoft-Windows-Security-Auditing" && (to_string($message.winlog_event_id) == "4625") &&
+
+        !ends_with(to_string($message.winlog_event_data_TargetUserName), "$") &&
+        to_string($message.winlog_event_data_TargetUserName) != "SYSTEM" &&
+        to_string($message.winlog_event_data_TargetUserName) != "LOCAL SERVICE" &&
+        to_string($message.winlog_event_data_TargetUserName) != "NETWORK SERVICE" &&
+        to_string($message.winlog_event_data_TargetUserName) != "ANONYMOUS LOGON" &&
+        !starts_with(to_string($message.winlog_event_data_TargetUserName), "DWM-") &&
+        !starts_with(to_string($message.winlog_event_data_TargetUserName), "UMFD-")
+    then
+      set_field("pr", "win_logon_failure");
+      route_to_stream(id:"{{ streams.target.id }}", remove_from_default: true);
+    end
+- name: win_logon_success
+  description: 'Long retention allowlist: win_logon_success'
+  source: |-
+    rule "win_logon_success"
+    when
+      has_field("winlog_event_id") && has_field("winlog_provider_name") && to_string($message.winlog_provider_name) == "Microsoft-Windows-Security-Auditing" && (to_string($message.winlog_event_id) == "4624") &&
+      (to_string($message.winlog_event_data_LogonType) == "2" || to_string($message.winlog_event_data_LogonType) == "7" || to_string($message.winlog_event_data_LogonType) == "10" || to_string($message.winlog_event_data_LogonType) == "11") &&
+
+        !ends_with(to_string($message.winlog_event_data_TargetUserName), "$") &&
+        to_string($message.winlog_event_data_TargetUserName) != "SYSTEM" &&
+        to_string($message.winlog_event_data_TargetUserName) != "LOCAL SERVICE" &&
+        to_string($message.winlog_event_data_TargetUserName) != "NETWORK SERVICE" &&
+        to_string($message.winlog_event_data_TargetUserName) != "ANONYMOUS LOGON" &&
+        !starts_with(to_string($message.winlog_event_data_TargetUserName), "DWM-") &&
+        !starts_with(to_string($message.winlog_event_data_TargetUserName), "UMFD-")
+    then
+      set_field("pr", "win_logon_success");
+      route_to_stream(id:"{{ streams.target.id }}", remove_from_default: true);
+    end
+- name: win_privileged_logon
+  description: 'Long retention allowlist: win_privileged_logon'
+  source: |-
+    rule "win_privileged_logon"
+    when
+      has_field("winlog_event_id") && has_field("winlog_provider_name") && to_string($message.winlog_provider_name) == "Microsoft-Windows-Security-Auditing" && (to_string($message.winlog_event_id) == "4672") &&
+
+        !ends_with(to_string($message.winlog_event_data_SubjectUserName), "$") &&
+        to_string($message.winlog_event_data_SubjectUserName) != "SYSTEM" &&
+        to_string($message.winlog_event_data_SubjectUserName) != "LOCAL SERVICE" &&
+        to_string($message.winlog_event_data_SubjectUserName) != "NETWORK SERVICE" &&
+        !starts_with(to_string($message.winlog_event_data_SubjectUserName), "DWM-") &&
+        !starts_with(to_string($message.winlog_event_data_SubjectUserName), "UMFD-")
+    then
+      set_field("pr", "win_privileged_logon");
+      route_to_stream(id:"{{ streams.target.id }}", remove_from_default: true);
+    end
+- name: win_user
+  description: 'Long retention allowlist: win_user'
+  source: |-
+    rule "win_user"
+    when
+      has_field("winlog_event_id") && has_field("winlog_provider_name") && to_string($message.winlog_provider_name) == "Microsoft-Windows-Security-Auditing" && (to_string($message.winlog_event_id) == "4720" || to_string($message.winlog_event_id) == "4722" || to_string($message.winlog_event_id) == "4723" || to_string($message.winlog_event_id) == "4724" || to_string($message.winlog_event_id) == "4725" || to_string($message.winlog_event_id) == "4726" || to_string($message.winlog_event_id) == "4738" || to_string($message.winlog_event_id) == "4740" || to_string($message.winlog_event_id) == "4767")
+    then
+      set_field("pr", "win_user");
+      route_to_stream(id:"{{ streams.target.id }}", remove_from_default: true);
+    end
+- name: win_group
+  description: 'Long retention allowlist: win_group'
+  source: |-
+    rule "win_group"
+    when
+      has_field("winlog_event_id") && has_field("winlog_provider_name") && to_string($message.winlog_provider_name) == "Microsoft-Windows-Security-Auditing" && (to_string($message.winlog_event_id) == "4727" || to_string($message.winlog_event_id) == "4728" || to_string($message.winlog_event_id) == "4729" || to_string($message.winlog_event_id) == "4730" || to_string($message.winlog_event_id) == "4731" || to_string($message.winlog_event_id) == "4732" || to_string($message.winlog_event_id) == "4733" || to_string($message.winlog_event_id) == "4734" || to_string($message.winlog_event_id) == "4735" || to_string($message.winlog_event_id) == "4737" || to_string($message.winlog_event_id) == "4754" || to_string($message.winlog_event_id) == "4755" || to_string($message.winlog_event_id) == "4756" || to_string($message.winlog_event_id) == "4757" || to_string($message.winlog_event_id) == "4758" || to_string($message.winlog_event_id) == "4764")
+    then
+      set_field("pr", "win_group");
+      route_to_stream(id:"{{ streams.target.id }}", remove_from_default: true);
+    end
+- name: win_service
+  description: 'Long retention allowlist: win_service'
+  source: |-
+    rule "win_service"
+    when
+      (has_field("winlog_event_id") && has_field("winlog_provider_name") && to_string($message.winlog_provider_name) == "Microsoft-Windows-Security-Auditing" && (to_string($message.winlog_event_id) == "4697")) ||
+      (has_field("winlog_event_id") && has_field("winlog_provider_name") && to_string($message.winlog_provider_name) == "Service Control Manager" && (to_string($message.winlog_event_id) == "7045" || to_string($message.winlog_event_id) == "7040"))
+    then
+      set_field("pr", "win_service");
+      route_to_stream(id:"{{ streams.target.id }}", remove_from_default: true);
+    end
+- name: win_task
+  description: 'Long retention allowlist: win_task (AD tuned)'
+  source: |-
+    rule "win_task"
+    when
+      (
+        has_field("winlog_event_id") && has_field("winlog_provider_name") &&
+        to_string($message.winlog_provider_name) == "Microsoft-Windows-Security-Auditing" &&
+        (to_string($message.winlog_event_id) == "4698" || to_string($message.winlog_event_id) == "4699" || to_string($message.winlog_event_id) == "4700" || to_string($message.winlog_event_id) == "4701" || to_string($message.winlog_event_id) == "4702")
+      ) || (
+        has_field("winlog_event_id") && has_field("winlog_provider_name") &&
+        to_string($message.winlog_provider_name) == "Microsoft-Windows-TaskScheduler" &&
+        (to_string($message.winlog_event_id) == "106" || to_string($message.winlog_event_id) == "140" || to_string($message.winlog_event_id) == "141" || to_string($message.winlog_event_id) == "142") &&
+        !contains(to_string($message.message), "WIN2201$") &&
+        !contains(to_string($message.message), "NT AUTHORITY") &&
+        !contains(to_string($message.message), "Windows Defender") &&
+        !contains(to_string($message.message), "CreateExplorerShellUnelevatedTask")
+      )
+    then
+      set_field("pr", "win_task");
+      route_to_stream(id:"{{ streams.target.id }}", remove_from_default: true);
+    end
+- name: win_audit_policy
+  description: 'Long retention allowlist: win_audit_policy (AD tuned)'
+  source: |-
+    rule "win_audit_policy"
+    when
+      has_field("winlog_event_id") && has_field("winlog_provider_name") &&
+      to_string($message.winlog_provider_name) == "Microsoft-Windows-Security-Auditing" &&
+      (
+        to_string($message.winlog_event_id) == "4719" ||
+        to_string($message.winlog_event_id) == "4902" ||
+        to_string($message.winlog_event_id) == "4904" ||
+        to_string($message.winlog_event_id) == "4905" ||
+        to_string($message.winlog_event_id) == "4906"
+      )
+    then
+      set_field("pr", "win_audit_policy");
+      route_to_stream(id:"{{ streams.target.id }}", remove_from_default: true);
+    end
+- name: win_defender
+  description: 'Long retention allowlist: win_defender'
+  source: |-
+    rule "win_defender"
+    when
+      has_field("winlog_event_id") && has_field("winlog_provider_name") &&
+      (to_string($message.winlog_provider_name) == "Microsoft-Windows-Windows Defender" || to_string($message.winlog_provider_name) == "Microsoft-Windows-Windows Defender/Operational") &&
+      (to_string($message.winlog_event_id) == "1116" || to_string($message.winlog_event_id) == "1117" || to_string($message.winlog_event_id) == "1118" || to_string($message.winlog_event_id) == "1119" || to_string($message.winlog_event_id) == "5007")
+    then
+      set_field("pr", "win_defender");
+      route_to_stream(id:"{{ streams.target.id }}", remove_from_default: true);
+    end
+- name: win_powershell
+  description: 'Long retention allowlist: win_powershell high-risk script block only'
+  source: |-
+    rule "win_powershell"
+    when
+      has_field("winlog_event_id") && has_field("winlog_provider_name") &&
+      to_string($message.winlog_provider_name) == "Microsoft-Windows-PowerShell" &&
+      to_string($message.winlog_event_id) == "4104" &&
+      (
+        contains(to_string($message.message), "FromBase64String") ||
+        contains(to_string($message.message), "EncodedCommand") ||
+        contains(to_string($message.message), "-enc ") ||
+        contains(to_string($message.message), "Invoke-Expression") ||
+        contains(to_string($message.message), "IEX ") ||
+        contains(to_string($message.message), "DownloadString") ||
+        contains(to_string($message.message), "DownloadFile") ||
+        contains(to_string($message.message), "Invoke-WebRequest") ||
+        contains(to_string($message.message), "New-Object Net.WebClient") ||
+        contains(to_string($message.message), "Add-MpPreference") ||
+        contains(to_string($message.message), "Set-MpPreference") ||
+        contains(to_string($message.message), "Set-ExecutionPolicy")
+      )
+    then
+      set_field("pr", "win_powershell");
+      route_to_stream(id:"{{ streams.target.id }}", remove_from_default: true);
+    end
+- name: win_gpo
+  description: 'Long retention allowlist: GPO directory-service changes'
+  source: |-
+    rule "win_gpo"
+    when
+      has_field("winlog_event_id") && has_field("winlog_provider_name") &&
+      to_string($message.winlog_provider_name) == "Microsoft-Windows-Security-Auditing" &&
+      (to_string($message.winlog_event_id) == "5136" || to_string($message.winlog_event_id) == "5137" || to_string($message.winlog_event_id) == "5141") &&
+      has_field("winlog_event_data_ObjectClass") &&
+      to_string($message.winlog_event_data_ObjectClass) == "groupPolicyContainer" &&
+      has_field("winlog_event_data_ObjectDN") &&
+      (contains(to_string($message.winlog_event_data_ObjectDN), "CN=Policies,CN=System") || contains(to_string($message.winlog_event_data_ObjectDN), "cn=policies,cn=system"))
+    then
+      set_field("pr", "win_gpo");
+      route_to_stream(id:"{{ streams.target.id }}", remove_from_default: true);
+    end

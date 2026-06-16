@@ -1,2 +1,252 @@
 # graylog.audit2archive
-Shift Graylog Events based on Pipelines to long term Archive
+
+Export and deploy Graylog pipeline rules that move selected audit/security events into a long-term archive stream.
+
+The project is built for allowlist-style retention: keep normal log volume in the default/short index, and move only selected security/admin events to an archive stream by using Graylog pipeline rules.
+
+## What this repository contains
+
+- `graylog_audit2archive.py` — command line tool for exporting and importing Graylog pipeline rules.
+- `examples/audit2archive-preset.yaml` — exported preset with the currently tested audit-to-archive rule set.
+- `requirements.txt` — Python dependency list.
+
+The example preset contains 17 active rules:
+
+### Linux rules
+
+- `linux_ssh` — SSH session open/close plus failed login rows.
+- `linux_sudo` — sudo command execution plus exact sudo authentication failures.
+- `linux_su` — su session open/close plus exact su authentication failures; deliberately excludes sudo sessions.
+- `linux_pkg` — package install/remove/update/upgrade with precise audit guards and apt/dpkg fallbacks.
+- `linux_user` — local user create/modify/delete.
+- `linux_group` — local group create/modify/delete.
+
+### Windows rules
+
+- `win_logon_failure`
+- `win_logon_success`
+- `win_privileged_logon`
+- `win_user`
+- `win_group`
+- `win_service`
+- `win_task`
+- `win_audit_policy`
+- `win_defender`
+- `win_powershell`
+- `win_gpo`
+
+Every rule sets a `pr` field with the rule name before routing, for example `pr=linux_pkg` or `pr=win_gpo`.
+
+## Concept
+
+Graylog pipelines run on source streams. For audit-to-archive routing the pipeline should run on the stream where messages first arrive, normally `Default Stream`.
+
+A matching rule calls:
+
+```graylog
+route_to_stream(id:"<archive stream id>", remove_from_default: true);
+```
+
+`remove_from_default: true` means matching messages are moved out of the default/short stream into the archive stream. They are not duplicated in both streams.
+
+The repository stores stream and input references by name. The importer resolves names to IDs at deploy time, so the same preset can be used on another Graylog server.
+
+## Install
+
+Use Python 3.9+.
+
+```bash
+python3 -m venv .venv
+. .venv/bin/activate
+python3 -m pip install -r requirements.txt
+```
+
+## Authentication
+
+Do not put secrets into YAML or Git.
+
+Recommended token mode:
+
+```bash
+export GRAYLOG_TOKEN='your-graylog-api-token'
+```
+
+The tool sends Graylog API tokens using Basic auth as `TOKEN:token`.
+
+For environments that already store a base64-encoded Basic auth value, use:
+
+```bash
+--auth-mode basic_b64 --basic-b64-file /path/to/basic-auth-b64
+```
+
+Passing only `--basic-b64-file` also implies `basic_b64` mode.
+
+## Export current live rules
+
+Export the active rules from a Graylog pipeline stage:
+
+```bash
+./graylog_audit2archive.py export \
+  --api-uri https://graylog.example.com/api \
+  --pipeline tier-long-routing \
+  --source-stream 'Default Stream' \
+  --target-stream long \
+  --output examples/audit2archive-preset.yaml
+```
+
+The exporter:
+
+1. Reads the named pipeline.
+2. Reads the active rules in the selected stage.
+3. Reads the full source for each rule.
+4. Replaces the target stream ID in `route_to_stream()` with `{{ streams.target.id }}`.
+5. Writes a portable YAML preset.
+
+The rule sources are otherwise preserved as tested on the source server.
+
+## Plan an import
+
+```bash
+./graylog_audit2archive.py plan \
+  --config examples/audit2archive-preset.yaml \
+  --api-uri https://graylog.example.com/api
+```
+
+The plan shows which rules and pipeline objects would be created or updated.
+
+Example output:
+
+```text
+OK     rule linux_ssh
+UPDATE rule linux_pkg
+CREATE rule win_gpo
+UPDATE pipeline tier-long-routing stage -> 17 rules
+CONNECT pipeline tier-long-routing to stream Default Stream (...)
+```
+
+## Apply an import
+
+```bash
+./graylog_audit2archive.py apply \
+  --config examples/audit2archive-preset.yaml \
+  --api-uri https://graylog.example.com/api
+```
+
+The importer is idempotent:
+
+- rules are created or updated by rule title/name
+- the pipeline is created or updated by pipeline title/name
+- the configured stage is rendered from the preset rule list
+- the pipeline is connected to the configured source stream
+
+By default the preset uses exact stage management. The target stage becomes exactly the listed rules. Old broad/catchall rules can remain as inactive Graylog rule objects, but they are removed from the active pipeline stage.
+
+## Verify an import
+
+```bash
+./graylog_audit2archive.py verify \
+  --config examples/audit2archive-preset.yaml \
+  --api-uri https://graylog.example.com/api
+```
+
+Verification checks that:
+
+- every configured rule exists
+- live rule sources match the rendered preset
+- the pipeline exists
+- the configured stage contains exactly the configured rule list
+
+It does not generate test events. Functional event testing should be done separately against Linux/Windows test hosts.
+
+## Stream and input overrides
+
+The preset stores names:
+
+```yaml
+streams:
+  source:
+    name: Default Stream
+  target:
+    name: long
+```
+
+Override at runtime when another environment uses different stream names:
+
+```bash
+./graylog_audit2archive.py apply \
+  -c examples/audit2archive-preset.yaml \
+  --api-uri https://graylog.example.com/api \
+  --stream source='Default Stream' \
+  --stream target='archive-long'
+```
+
+Inputs can also be resolved by name if a rule source uses `{{ inputs.<alias>.id }}`:
+
+```yaml
+inputs:
+  windows_beats:
+    name: Beats
+```
+
+Runtime override:
+
+```bash
+--input windows_beats='Beats'
+```
+
+## Preset format
+
+Minimal structure:
+
+```yaml
+version: 1
+
+graylog:
+  api_uri: https://graylog.example.com/api
+  verify_tls: true
+  timeout: 30
+
+auth:
+  mode: token
+  token_env: GRAYLOG_TOKEN
+
+streams:
+  source:
+    name: Default Stream
+  target:
+    name: long
+
+pipeline:
+  name: tier-long-routing
+  stage: 0
+  match: EITHER
+  stage_policy: exact
+
+routing:
+  remove_from_default: true
+  pr_field: pr
+
+rules:
+  - name: linux_ssh
+    description: SSH login/logout and failed login
+    source: |
+      rule "linux_ssh"
+      when
+        ...
+      then
+        set_field("pr", "linux_ssh");
+        route_to_stream(id:"{{ streams.target.id }}", remove_from_default: true);
+      end
+```
+
+## Operational notes
+
+- The pipeline should usually be connected to `Default Stream`, not to the archive stream. Pipelines only process messages that are already in connected streams.
+- `route_to_stream()` requires a stream ID. The importer resolves the configured target stream name and renders `{{ streams.target.id }}`.
+- Keep `remove_from_default: true` for archive routing if you want selected events moved out of the short/default stream.
+- Keep rule names stable. They are the idempotency key.
+- Keep the `pr` field; it is the simplest way to verify which rule matched a message.
+
+## License
+
+Apache-2.0. See `LICENSE`.

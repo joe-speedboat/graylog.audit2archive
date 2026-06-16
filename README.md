@@ -7,7 +7,9 @@ The project is built for allowlist-style retention: keep normal log volume in th
 ## What this repository contains
 
 - `graylog_audit2archive.py` — command line tool for exporting and importing Graylog pipeline rules.
-- `examples/audit2archive-preset.yaml` — exported preset with the currently tested audit-to-archive rule set.
+- `preset/audit2archive-preset.yaml` — exported preset with the currently tested audit-to-archive rule set.
+- `docs/rule-maintenance.md` — rule change workflow, precision checklist, and common pitfalls.
+- `AGENTS.md` — fast operational guide for Hermes/automation agents working in this repo.
 - `requirements.txt` — Python dependency list.
 
 The example preset contains 17 active rules:
@@ -61,6 +63,21 @@ python3 -m venv .venv
 python3 -m pip install -r requirements.txt
 ```
 
+## For Hermes agents and maintainers
+
+Start with `AGENTS.md`. It captures the repository invariants, safe validation commands, and public-repo safety rules.
+
+For rule changes, follow `docs/rule-maintenance.md`:
+
+1. edit `preset/audit2archive-preset.yaml`
+2. run `plan`
+3. apply only to an approved/test Graylog server
+4. run `verify`
+5. generate positive and negative test events for the changed rule
+6. search the archive stream by `pr:<rule_name>`
+
+Keep the preset portable: no credentials, no private hostnames, no hardcoded stream IDs.
+
 ## Authentication
 
 Do not put secrets into YAML or Git.
@@ -91,7 +108,7 @@ Export the active rules from a Graylog pipeline stage:
   --pipeline tier-long-routing \
   --source-stream 'Default Stream' \
   --target-stream long \
-  --output examples/audit2archive-preset.yaml
+  --output preset/audit2archive-preset.yaml
 ```
 
 The exporter:
@@ -108,7 +125,7 @@ The rule sources are otherwise preserved as tested on the source server.
 
 ```bash
 ./graylog_audit2archive.py plan \
-  --config examples/audit2archive-preset.yaml \
+  --config preset/audit2archive-preset.yaml \
   --api-uri https://graylog.example.com/api
 ```
 
@@ -128,7 +145,7 @@ CONNECT pipeline tier-long-routing to stream Default Stream (...)
 
 ```bash
 ./graylog_audit2archive.py apply \
-  --config examples/audit2archive-preset.yaml \
+  --config preset/audit2archive-preset.yaml \
   --api-uri https://graylog.example.com/api
 ```
 
@@ -145,7 +162,7 @@ By default the preset uses exact stage management. The target stage becomes exac
 
 ```bash
 ./graylog_audit2archive.py verify \
-  --config examples/audit2archive-preset.yaml \
+  --config preset/audit2archive-preset.yaml \
   --api-uri https://graylog.example.com/api
 ```
 
@@ -174,7 +191,7 @@ Override at runtime when another environment uses different stream names:
 
 ```bash
 ./graylog_audit2archive.py apply \
-  -c examples/audit2archive-preset.yaml \
+  -c preset/audit2archive-preset.yaml \
   --api-uri https://graylog.example.com/api \
   --stream source='Default Stream' \
   --stream target='archive-long'

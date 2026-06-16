@@ -39,6 +39,31 @@ The example preset contains 17 active rules:
 
 Every rule sets a `pr` field with the rule name before routing, for example `pr=linux_pkg` or `pr=win_gpo`.
 
+## Log delivery dependency
+
+This repository only manages the Graylog archive-routing layer. It assumes that Linux and Windows hosts already deliver logs with the companion Ansible role:
+
+```text
+https://github.com/joe-speedboat/ansible.log_forwarder
+```
+
+That role is responsible for OS-side log collection and field normalisation:
+
+- Linux hosts: journald/auditd logs are forwarded to Graylog and parsed into fields such as `auth_service`, `auth_session_state`, `auth_result`, `sudo_command`, `log_type`, `audit_type`, `package_action`, and `package_name`.
+- Windows hosts: Windows Event Log data is forwarded to Graylog and parsed into fields such as `winlog_event_id`, `winlog_provider_name`, and `winlog_event_data_*`.
+
+The rules in `preset/audit2archive-preset.yaml` depend on those fields. If another forwarder/parser is used, the rules may not match until its output fields are made compatible or the preset is adjusted and retested.
+
+Wiring summary:
+
+```text
+Linux/Windows hosts
+  -> joe-speedboat/ansible.log_forwarder
+  -> Graylog input / Default Stream
+  -> tier-long-routing pipeline from this repository
+  -> archive stream, for example long
+```
+
 ## Concept
 
 Graylog pipelines run on source streams. For audit-to-archive routing the pipeline should run on the stream where messages first arrive, normally `Default Stream`.

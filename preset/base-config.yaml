@@ -34,6 +34,7 @@ index_sets:
     index_lifetime_max: P40D
   index_analyzer: standard
   use_legacy_rotation: false
+  writable: true
 - title: short
   description: Debugging, just to view all the data
   index_prefix: short
@@ -57,6 +58,7 @@ index_sets:
     index_lifetime_max: P9D
   index_analyzer: standard
   use_legacy_rotation: false
+  writable: true
 - title: long
   description: compliance
   index_prefix: long
@@ -80,6 +82,7 @@ index_sets:
     index_lifetime_max: P400D
   index_analyzer: standard
   use_legacy_rotation: false
+  writable: true
 streams:
 - title: Default Stream
   matching_type: AND
@@ -121,9 +124,7 @@ inputs:
     port: 514
     tls_key_file: ''
     tls_enable: false
-    tls_key_password:
-      encrypted_value: ''
-      salt: ''
+    tls_key_password: ''
     max_message_size: 2097152
     tls_client_auth: disabled
     override_source: null
@@ -142,9 +143,7 @@ inputs:
     port: 5044
     tls_key_file: ''
     tls_enable: false
-    tls_key_password:
-      encrypted_value: ''
-      salt: ''
+    tls_key_password: ''
     tls_client_auth: disabled
     charset_name: UTF-8
     no_beats_prefix: true
@@ -178,9 +177,7 @@ inputs:
     port: 12201
     tls_key_file: ''
     tls_enable: false
-    tls_key_password:
-      encrypted_value: ''
-      salt: ''
+    tls_key_password: ''
     max_message_size: 2097152
     tls_client_auth: disabled
     override_source: null

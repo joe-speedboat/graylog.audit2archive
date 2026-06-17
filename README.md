@@ -6,9 +6,11 @@ The project is built for allowlist-style retention: keep normal log volume in th
 
 ## What this repository contains
 
+- `graylog_baseconfig.py` — command line tool for exporting and importing Graylog base objects: index sets, streams, and inputs.
 - `graylog_audit2archive.py` — command line tool for exporting and importing Graylog pipeline rules.
+- `preset/base-config.yaml` — portable Graylog base configuration mirroring the tested setup: `default`, `short`, and `long` index sets/streams plus Syslog, Beats/Windows, and GELF inputs.
 - `preset/audit2archive-preset.yaml` — exported preset with the currently tested audit-to-archive rule set.
-- `docs/rule-maintenance.md` — rule change workflow, precision checklist, and common pitfalls.
+- `docs/rule-maintenance.md` — rule/base-config change workflow, precision checklist, and common pitfalls.
 - `AGENTS.md` — fast operational guide for Hermes/automation agents working in this repo.
 - `requirements.txt` — Python dependency list.
 
@@ -76,7 +78,42 @@ route_to_stream(id:"<archive stream id>", remove_from_default: true);
 
 `remove_from_default: true` means matching messages are moved out of the default/short stream into the archive stream. They are not duplicated in both streams.
 
-The repository stores stream and input references by name. The importer resolves names to IDs at deploy time, so the same preset can be used on another Graylog server.
+The repository stores stream and input references by name. The base-config importer creates those named objects first; the pipeline importer resolves names to IDs at deploy time, so the same presets can be used on another Graylog server.
+
+## Base configuration: indices, streams, inputs
+
+Run the base configuration before importing pipeline rules. It manages the Graylog objects that messages need before the archive-routing rules are useful:
+
+| Object type | Preset file | Managed by |
+|---|---|---|
+| Index sets | `preset/base-config.yaml` | `graylog_baseconfig.py` |
+| Streams | `preset/base-config.yaml` | `graylog_baseconfig.py` |
+| Inputs | `preset/base-config.yaml` | `graylog_baseconfig.py` |
+| Pipeline/rules | `preset/audit2archive-preset.yaml` | `graylog_audit2archive.py` |
+
+The included base preset mirrors the tested setup:
+
+- index sets: `default`, `short`, `long`
+- streams: `Default Stream` reference, `short`, `long`
+- inputs: `Syslog TCP`, `Syslog UDP`, `Windows`/Beats, `GELF TCP`
+
+Export a live baseline:
+
+```bash
+./graylog_baseconfig.py export \
+  --api-uri https://graylog.example.com/api \
+  --output preset/base-config.yaml
+```
+
+Plan/apply/verify base configuration:
+
+```bash
+./graylog_baseconfig.py plan   -c preset/base-config.yaml --api-uri https://graylog.example.com/api
+./graylog_baseconfig.py apply  -c preset/base-config.yaml --api-uri https://graylog.example.com/api
+./graylog_baseconfig.py verify -c preset/base-config.yaml --api-uri https://graylog.example.com/api
+```
+
+`Default Stream` is treated as a builtin reference and is not created by the importer. Non-builtin streams are connected to index sets by name; the script resolves the index-set IDs at apply time.
 
 ## Install
 

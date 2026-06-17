@@ -1,0 +1,187 @@
+version: 1
+metadata:
+  description: Graylog base configuration for audit-to-archive.
+  log_delivery_dependency: https://github.com/joe-speedboat/ansible.log_forwarder
+  note: Create index sets, streams, and inputs before deploying pipeline rules.
+graylog:
+  api_uri: https://graylog.example.com/api
+  verify_tls: false
+  timeout: 30
+auth:
+  mode: token
+  token_env: GRAYLOG_TOKEN
+index_sets:
+- title: default
+  description: basic os
+  index_prefix: default
+  shards: 1
+  replicas: 0
+  index_optimization_max_num_segments: 1
+  index_optimization_disabled: false
+  field_type_refresh_interval: 5000
+  rotation_strategy_class: org.graylog2.indexer.rotation.strategies.TimeBasedSizeOptimizingStrategy
+  rotation_strategy:
+    type: org.graylog2.indexer.rotation.strategies.TimeBasedSizeOptimizingStrategyConfig
+    index_lifetime_min: P30D
+    index_lifetime_max: P40D
+  retention_strategy_class: org.graylog2.indexer.retention.strategies.DeletionRetentionStrategy
+  retention_strategy:
+    type: org.graylog2.indexer.retention.strategies.DeletionRetentionStrategyConfig
+    max_number_of_indices: 20
+  data_tiering:
+    type: hot_only
+    index_lifetime_min: P30D
+    index_lifetime_max: P40D
+  index_analyzer: standard
+  use_legacy_rotation: false
+- title: short
+  description: Debugging, just to view all the data
+  index_prefix: short
+  shards: 1
+  replicas: 0
+  index_optimization_max_num_segments: 1
+  index_optimization_disabled: false
+  field_type_refresh_interval: 5000
+  rotation_strategy_class: org.graylog2.indexer.rotation.strategies.TimeBasedSizeOptimizingStrategy
+  rotation_strategy:
+    type: org.graylog2.indexer.rotation.strategies.TimeBasedSizeOptimizingStrategyConfig
+    index_lifetime_min: P30D
+    index_lifetime_max: P40D
+  retention_strategy_class: org.graylog2.indexer.retention.strategies.DeletionRetentionStrategy
+  retention_strategy:
+    type: org.graylog2.indexer.retention.strategies.DeletionRetentionStrategyConfig
+    max_number_of_indices: 20
+  data_tiering:
+    type: hot_only
+    index_lifetime_min: P7D
+    index_lifetime_max: P9D
+  index_analyzer: standard
+  use_legacy_rotation: false
+- title: long
+  description: compliance
+  index_prefix: long
+  shards: 1
+  replicas: 0
+  index_optimization_max_num_segments: 1
+  index_optimization_disabled: false
+  field_type_refresh_interval: 5000
+  rotation_strategy_class: org.graylog2.indexer.rotation.strategies.TimeBasedSizeOptimizingStrategy
+  rotation_strategy:
+    type: org.graylog2.indexer.rotation.strategies.TimeBasedSizeOptimizingStrategyConfig
+    index_lifetime_min: P30D
+    index_lifetime_max: P40D
+  retention_strategy_class: org.graylog2.indexer.retention.strategies.DeletionRetentionStrategy
+  retention_strategy:
+    type: org.graylog2.indexer.retention.strategies.DeletionRetentionStrategyConfig
+    max_number_of_indices: 20
+  data_tiering:
+    type: hot_only
+    index_lifetime_min: P365D
+    index_lifetime_max: P400D
+  index_analyzer: standard
+  use_legacy_rotation: false
+streams:
+- title: Default Stream
+  matching_type: AND
+  remove_matches_from_default_stream: false
+  disabled: false
+  rules: []
+  index_set: default
+  builtin: true
+- title: short
+  description: debug logs
+  matching_type: AND
+  remove_matches_from_default_stream: false
+  disabled: true
+  rules: []
+  index_set: short
+- title: long
+  description: SIEM
+  matching_type: AND
+  remove_matches_from_default_stream: false
+  disabled: false
+  rules: []
+  index_set: long
+inputs:
+- title: Syslog TCP
+  type: org.graylog2.inputs.syslog.tcp.SyslogTCPInput
+  global: true
+  configuration:
+    recv_buffer_size: 1048576
+    tcp_keepalive: false
+    use_null_delimiter: false
+    number_worker_threads: 8
+    timezone: Europe/Zurich
+    tls_client_auth_cert_file: ''
+    force_rdns: false
+    bind_address: 0.0.0.0
+    tls_cert_file: ''
+    store_full_message: false
+    expand_structured_data: false
+    port: 514
+    tls_key_file: ''
+    tls_enable: false
+    tls_key_password:
+      encrypted_value: ''
+      salt: ''
+    max_message_size: 2097152
+    tls_client_auth: disabled
+    override_source: null
+    charset_name: UTF-8
+    allow_override_date: true
+- title: Windows
+  type: org.graylog.plugins.beats.Beats2Input
+  global: true
+  configuration:
+    recv_buffer_size: 1048576
+    tcp_keepalive: false
+    number_worker_threads: 6
+    tls_client_auth_cert_file: ''
+    bind_address: 0.0.0.0
+    tls_cert_file: ''
+    port: 5044
+    tls_key_file: ''
+    tls_enable: false
+    tls_key_password:
+      encrypted_value: ''
+      salt: ''
+    tls_client_auth: disabled
+    charset_name: UTF-8
+    no_beats_prefix: true
+- title: Syslog UDP
+  type: org.graylog2.inputs.syslog.udp.SyslogUDPInput
+  global: true
+  configuration:
+    expand_structured_data: false
+    recv_buffer_size: 262144
+    port: 514
+    number_worker_threads: 8
+    timezone: Europe/Zurich
+    override_source: null
+    charset_name: UTF-8
+    force_rdns: false
+    allow_override_date: true
+    bind_address: 0.0.0.0
+    store_full_message: false
+- title: GELF TCP
+  type: org.graylog2.inputs.gelf.tcp.GELFTCPInput
+  global: true
+  configuration:
+    recv_buffer_size: 1048576
+    tcp_keepalive: false
+    use_null_delimiter: true
+    number_worker_threads: 8
+    tls_client_auth_cert_file: ''
+    bind_address: 0.0.0.0
+    tls_cert_file: ''
+    decompress_size_limit: 8388608
+    port: 12201
+    tls_key_file: ''
+    tls_enable: false
+    tls_key_password:
+      encrypted_value: ''
+      salt: ''
+    max_message_size: 2097152
+    tls_client_auth: disabled
+    override_source: null
+    charset_name: UTF-8

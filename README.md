@@ -80,7 +80,76 @@ route_to_stream(id:"<archive stream id>", remove_from_default: true);
 
 The repository stores stream and input references by name. The base-config importer creates those named objects first; the pipeline importer resolves names to IDs at deploy time, so the same presets can be used on another Graylog server.
 
-## Base configuration: indices, streams, inputs
+## Quick start: configure a new Graylog
+
+Use this order on a freshly installed Graylog node:
+
+1. define connection variables
+2. create the Python virtual environment
+3. create/export a Graylog API token
+4. apply and verify the base config: index sets, streams, inputs
+5. apply and verify the archive pipeline rules
+
+### 1. Define variables
+
+Set these once and reuse them for every command below:
+
+```bash
+export GRAYLOG_URL="https://graylog.example.com"
+export GRAYLOG_API_URI="${GRAYLOG_URL}/api"
+export GRAYLOG_USER="admin"
+export GRAYLOG_PASS='CHANGE_ME'
+export GRAYLOG_TOKEN_NAME="audit2archive"
+export GRAYLOG_TLS_ARGS="--no-verify-tls"   # remove this when TLS is trusted
+```
+
+### 2. Create the Python virtual environment
+
+Use Python 3.9+.
+
+```bash
+python3 -m venv .venv
+. .venv/bin/activate
+python3 -m pip install -r requirements.txt
+```
+
+### 3. Create a Graylog API token from the CLI
+
+Do not put secrets into YAML or Git. The tools send Graylog API tokens using Basic auth as `TOKEN:token`.
+
+Graylog 7's token endpoint takes the **Graylog user id**, not the login name. Do not use `/api/users/admin/tokens/...` directly: on Graylog 7 this can fail with:
+
+```json
+{"type":"ApiError","message":"state should be: hexString has 24 characters"}
+```
+
+Resolve the user id first, then create the token:
+
+```bash
+export GRAYLOG_USER_ID=$(curl -sk \
+  -u "${GRAYLOG_USER}:${GRAYLOG_PASS}" \
+  -H "X-Requested-By: cli" \
+  "${GRAYLOG_API_URI}/users?per_page=100" \
+  | GRAYLOG_USER="${GRAYLOG_USER}" python3 -c 'import json,os,sys; data=json.load(sys.stdin); users=data.get("users", data if isinstance(data, list) else []); wanted=os.environ["GRAYLOG_USER"]; print(next(u["id"] for u in users if u.get("username") == wanted))')
+
+curl -sk \
+  -u "${GRAYLOG_USER}:${GRAYLOG_PASS}" \
+  -H "X-Requested-By: cli" \
+  -H "Content-Type: application/json" \
+  -X POST \
+  "${GRAYLOG_API_URI}/users/${GRAYLOG_USER_ID}/tokens/${GRAYLOG_TOKEN_NAME}"
+```
+
+The response contains the token. Save it immediately; Graylog only shows the token value on creation:
+
+```bash
+export GRAYLOG_TOKEN='the-token-value'
+unset GRAYLOG_PASS
+```
+
+If a fresh Graylog 7 install is still in preflight/setup mode, normal user-token endpoints may return `404`. Finish the initial setup first, then create the token.
+
+### 4. Apply base configuration: indices, streams, inputs
 
 Run the base configuration before importing pipeline rules. It manages the Graylog objects that messages need before the archive-routing rules are useful:
 
@@ -97,33 +166,61 @@ The included base preset mirrors the tested setup:
 - streams: `Default Stream` reference, `short`, `long`
 - inputs: `Syslog TCP`, `Syslog UDP`, `Windows`/Beats, `GELF TCP`
 
-Export a live baseline:
-
 ```bash
-./graylog_baseconfig.py export \
-  --api-uri https://graylog.example.com/api \
-  --output preset/base-config.yaml
-```
+./graylog_baseconfig.py plan \
+  -c preset/base-config.yaml \
+  --api-uri "${GRAYLOG_API_URI}" \
+  ${GRAYLOG_TLS_ARGS}
 
-Plan/apply/verify base configuration:
+./graylog_baseconfig.py apply \
+  -c preset/base-config.yaml \
+  --api-uri "${GRAYLOG_API_URI}" \
+  ${GRAYLOG_TLS_ARGS}
 
-```bash
-./graylog_baseconfig.py plan   -c preset/base-config.yaml --api-uri https://graylog.example.com/api
-./graylog_baseconfig.py apply  -c preset/base-config.yaml --api-uri https://graylog.example.com/api
-./graylog_baseconfig.py verify -c preset/base-config.yaml --api-uri https://graylog.example.com/api
+./graylog_baseconfig.py verify \
+  -c preset/base-config.yaml \
+  --api-uri "${GRAYLOG_API_URI}" \
+  ${GRAYLOG_TLS_ARGS}
 ```
 
 `Default Stream` is treated as a builtin reference and is not created by the importer. Non-builtin streams are connected to index sets by name; the script resolves the index-set IDs at apply time.
 
-## Install
+### 5. Apply archive pipeline rules
 
-Use Python 3.9+.
+After base config verifies, import the allowlist pipeline rules:
 
 ```bash
-python3 -m venv .venv
-. .venv/bin/activate
-python3 -m pip install -r requirements.txt
+./graylog_audit2archive.py plan \
+  -c preset/audit2archive-preset.yaml \
+  --api-uri "${GRAYLOG_API_URI}" \
+  ${GRAYLOG_TLS_ARGS}
+
+./graylog_audit2archive.py apply \
+  -c preset/audit2archive-preset.yaml \
+  --api-uri "${GRAYLOG_API_URI}" \
+  ${GRAYLOG_TLS_ARGS}
+
+./graylog_audit2archive.py verify \
+  -c preset/audit2archive-preset.yaml \
+  --api-uri "${GRAYLOG_API_URI}" \
+  ${GRAYLOG_TLS_ARGS}
 ```
+
+### Basic auth fallback
+
+For short-lived lab tests, token auth can be replaced with a base64-encoded Basic auth file:
+
+```bash
+printf '%s:%s' "${GRAYLOG_USER}" "${GRAYLOG_PASS}" | base64 -w0 > /tmp/graylog-auth-b64
+
+./graylog_baseconfig.py verify \
+  -c preset/base-config.yaml \
+  --api-uri "${GRAYLOG_API_URI}" \
+  --basic-b64-file /tmp/graylog-auth-b64 \
+  ${GRAYLOG_TLS_ARGS}
+```
+
+Passing only `--basic-b64-file` implies `basic_b64` mode.
 
 ## For Hermes agents and maintainers
 
@@ -140,72 +237,16 @@ For rule changes, follow `docs/rule-maintenance.md`:
 
 Keep the preset portable: no credentials, no private hostnames, no hardcoded stream IDs.
 
-## Authentication
+## Export current live base configuration
 
-Do not put secrets into YAML or Git.
-
-Recommended token mode:
+Export a live baseline:
 
 ```bash
-export GRAYLOG_TOKEN='your-graylog-api-token'
+./graylog_baseconfig.py export \
+  --api-uri "${GRAYLOG_API_URI}" \
+  --output preset/base-config.yaml \
+  ${GRAYLOG_TLS_ARGS}
 ```
-
-The tools send Graylog API tokens using Basic auth as `TOKEN:token`.
-
-### Create a Graylog API token from the CLI
-
-Graylog 7's token endpoint takes the **Graylog user id**, not the login name. Do not use `/api/users/admin/tokens/...` directly: on Graylog 7 this can fail with:
-
-```json
-{"type":"ApiError","message":"state should be: hexString has 24 characters"}
-```
-
-Resolve the user id first, then create the token:
-
-```bash
-GRAYLOG_URL="https://graylog.example.com"
-GRAYLOG_USER="admin"
-GRAYLOG_PASS='CHANGE_ME'
-TOKEN_NAME="audit2archive"
-
-USER_ID=$(curl -sk \
-  -u "${GRAYLOG_USER}:${GRAYLOG_PASS}" \
-  -H "X-Requested-By: cli" \
-  "${GRAYLOG_URL}/api/users?per_page=100" \
-  | GRAYLOG_USER="${GRAYLOG_USER}" python3 -c 'import json,os,sys; data=json.load(sys.stdin); users=data.get("users", data if isinstance(data, list) else []); wanted=os.environ["GRAYLOG_USER"]; print(next(u["id"] for u in users if u.get("username") == wanted))')
-
-curl -sk \
-  -u "${GRAYLOG_USER}:${GRAYLOG_PASS}" \
-  -H "X-Requested-By: cli" \
-  -H "Content-Type: application/json" \
-  -X POST \
-  "${GRAYLOG_URL}/api/users/${USER_ID}/tokens/${TOKEN_NAME}"
-```
-
-The response contains the token. Save it immediately; Graylog only shows the token value on creation.
-
-Use it with the tools:
-
-```bash
-export GRAYLOG_TOKEN='the-token-value'
-
-./graylog_baseconfig.py verify \
-  -c preset/base-config.yaml \
-  --api-uri "${GRAYLOG_URL}/api" \
-  --no-verify-tls
-```
-
-If a fresh Graylog 7 install is still in preflight/setup mode, normal user-token endpoints may return `404`. Finish the initial setup first, then create the token.
-
-### Basic auth fallback
-
-For environments that already store a base64-encoded Basic auth value, use:
-
-```bash
---auth-mode basic_b64 --basic-b64-file /path/to/basic-auth-b64
-```
-
-Passing only `--basic-b64-file` also implies `basic_b64` mode.
 
 ## Export current live rules
 
@@ -213,11 +254,12 @@ Export the active rules from a Graylog pipeline stage:
 
 ```bash
 ./graylog_audit2archive.py export \
-  --api-uri https://graylog.example.com/api \
+  --api-uri "${GRAYLOG_API_URI}" \
   --pipeline tier-long-routing \
   --source-stream 'Default Stream' \
   --target-stream long \
-  --output preset/audit2archive-preset.yaml
+  --output preset/audit2archive-preset.yaml \
+  ${GRAYLOG_TLS_ARGS}
 ```
 
 The exporter:
@@ -235,7 +277,8 @@ The rule sources are otherwise preserved as tested on the source server.
 ```bash
 ./graylog_audit2archive.py plan \
   --config preset/audit2archive-preset.yaml \
-  --api-uri https://graylog.example.com/api
+  --api-uri "${GRAYLOG_API_URI}" \
+  ${GRAYLOG_TLS_ARGS}
 ```
 
 The plan shows which rules and pipeline objects would be created or updated.
@@ -255,7 +298,8 @@ CONNECT pipeline tier-long-routing to stream Default Stream (...)
 ```bash
 ./graylog_audit2archive.py apply \
   --config preset/audit2archive-preset.yaml \
-  --api-uri https://graylog.example.com/api
+  --api-uri "${GRAYLOG_API_URI}" \
+  ${GRAYLOG_TLS_ARGS}
 ```
 
 The importer is idempotent:
@@ -272,7 +316,8 @@ By default the preset uses exact stage management. The target stage becomes exac
 ```bash
 ./graylog_audit2archive.py verify \
   --config preset/audit2archive-preset.yaml \
-  --api-uri https://graylog.example.com/api
+  --api-uri "${GRAYLOG_API_URI}" \
+  ${GRAYLOG_TLS_ARGS}
 ```
 
 Verification checks that:
@@ -301,9 +346,10 @@ Override at runtime when another environment uses different stream names:
 ```bash
 ./graylog_audit2archive.py apply \
   -c preset/audit2archive-preset.yaml \
-  --api-uri https://graylog.example.com/api \
+  --api-uri "${GRAYLOG_API_URI}" \
   --stream source='Default Stream' \
-  --stream target='archive-long'
+  --stream target='archive-long' \
+  ${GRAYLOG_TLS_ARGS}
 ```
 
 Inputs can also be resolved by name if a rule source uses `{{ inputs.<alias>.id }}`:

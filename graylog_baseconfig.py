@@ -42,6 +42,7 @@ MANAGED_INDEX_SET_FIELDS = [
     "data_tiering",
     "index_analyzer",
     "use_legacy_rotation",
+    "writable",
 ]
 
 MANAGED_STREAM_FIELDS = [
@@ -94,10 +95,10 @@ def _sanitize_input_config(config: Dict[str, Any]) -> Dict[str, Any]:
     for key, value in config.items():
         lowered = key.lower()
         if key in SENSITIVE_INPUT_KEYS or any(part in lowered for part in ["password", "secret", "token"]):
-            if isinstance(value, dict):
-                sanitized[key] = {subkey: "" for subkey in value}
-            else:
-                sanitized[key] = ""
+            # Graylog exports encrypted/salted secret objects for some input
+            # fields, but input create/update endpoints expect plain string
+            # set values. Keep public presets secret-free and API-compatible.
+            sanitized[key] = ""
         else:
             sanitized[key] = copy.deepcopy(value)
     return sanitized
@@ -141,7 +142,9 @@ def update_index_set(client: GraylogClient, index_set_id: str, payload: Dict[str
 
 
 def create_stream(client: GraylogClient, payload: Dict[str, Any]) -> Dict[str, Any]:
-    return client.request("POST", "/streams", payload) or {}
+    # Graylog 7 stream creation uses the shared-entity wrapper. Sending the
+    # bare stream object returns: entity cannot be null.
+    return client.request("POST", "/streams", {"entity": payload}) or {}
 
 
 def update_stream(client: GraylogClient, stream_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -298,8 +301,16 @@ def compute_plan(client: GraylogClient, config: Dict[str, Any]) -> Tuple[List[st
         else:
             messages.append(f"OK     index_set {title}")
 
-    # Refresh after potential index-set creates during apply; for plan this is current.
-    index_by_title_for_streams = live_index_by_title
+    # Streams can reference index sets that are part of the same desired preset.
+    # During plan/verify those index sets may not exist yet, so keep a pending
+    # placeholder to avoid failing before apply has a chance to create them. The
+    # apply command creates/updates index sets first, then recomputes the plan so
+    # stream payloads are rendered with real Graylog index_set_id values.
+    index_by_title_for_streams = dict(live_index_by_title)
+    for cfg in desired_index_sets:
+        title = cfg.get("title")
+        if title and title not in index_by_title_for_streams:
+            index_by_title_for_streams[title] = {"id": f"__pending_index_set__:{title}", "title": title}
 
     for cfg in desired_streams:
         title = cfg["title"]

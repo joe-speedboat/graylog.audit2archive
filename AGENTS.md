@@ -8,7 +8,9 @@ Maintain a portable, idempotent Graylog pipeline preset that routes only selecte
 
 The core deliverables are:
 
-- `graylog_audit2archive.py` — CLI tool for export/plan/apply/verify.
+- `graylog_baseconfig.py` — CLI tool for export/plan/apply/verify of index sets, streams, and inputs.
+- `graylog_audit2archive.py` — CLI tool for export/plan/apply/verify of pipeline rules.
+- `preset/base-config.yaml` — portable Graylog base object preset.
 - `preset/audit2archive-preset.yaml` — portable rule preset.
 - `docs/rule-maintenance.md` — safe workflow for changing rules.
 - `README.md` — user-facing setup and usage guide.
@@ -48,7 +50,7 @@ If a rule is not matching, first verify that the sending host is managed by `ans
 python3 -m venv .venv
 . .venv/bin/activate
 python3 -m pip install -r requirements.txt
-python3 -m py_compile graylog_audit2archive.py
+python3 -m py_compile graylog_baseconfig.py graylog_audit2archive.py
 ```
 
 ## Typical validation commands
@@ -56,7 +58,7 @@ python3 -m py_compile graylog_audit2archive.py
 For public/static validation:
 
 ```bash
-python3 -m py_compile graylog_audit2archive.py
+python3 -m py_compile graylog_baseconfig.py graylog_audit2archive.py
 python3 - <<'PY'
 import yaml
 with open('preset/audit2archive-preset.yaml') as f:
@@ -70,6 +72,14 @@ PY
 For live validation, use placeholders for private values in any committed text:
 
 ```bash
+./graylog_baseconfig.py plan \
+  -c preset/base-config.yaml \
+  --api-uri https://graylog.example.com/api
+
+./graylog_baseconfig.py verify \
+  -c preset/base-config.yaml \
+  --api-uri https://graylog.example.com/api
+
 ./graylog_audit2archive.py plan \
   -c preset/audit2archive-preset.yaml \
   --api-uri https://graylog.example.com/api
@@ -80,6 +90,15 @@ For live validation, use placeholders for private values in any committed text:
 ```
 
 If using local credentials during development, keep paths and tokens out of commits and PR text.
+
+## When changing base configuration
+
+1. Edit `preset/base-config.yaml`.
+2. Keep object names stable (`long`, `short`, `GELF TCP`, `Windows`) unless coordinating matching changes in Graylog and `ansible.log_forwarder`.
+3. Run `graylog_baseconfig.py plan` against a test/approved Graylog server.
+4. Apply with `graylog_baseconfig.py apply` only after the plan shows intended changes.
+5. Run `graylog_baseconfig.py verify`.
+6. Then run the pipeline rule `plan`/`verify`; streams and inputs must exist before rules can work.
 
 ## When changing rules
 

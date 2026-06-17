@@ -1,6 +1,6 @@
 # Rule maintenance guide
 
-This guide describes how to maintain `preset/audit2archive-preset.yaml` without breaking the audit-to-archive contract.
+This guide describes how to maintain `preset/base-config.yaml` and `preset/audit2archive-preset.yaml` without breaking the audit-to-archive contract.
 
 ## Mental model
 
@@ -20,8 +20,10 @@ archive stream, usually long
 
 ## Files to know
 
-- `preset/audit2archive-preset.yaml` — source of truth for active rules.
-- `graylog_audit2archive.py` — exporter/importer.
+- `preset/base-config.yaml` — source of truth for index sets, streams, and inputs.
+- `preset/audit2archive-preset.yaml` — source of truth for active pipeline rules.
+- `graylog_baseconfig.py` — base object exporter/importer.
+- `graylog_audit2archive.py` — pipeline rule exporter/importer.
 - `README.md` — user-facing usage.
 - `AGENTS.md` — agent quickstart and invariants.
 
@@ -130,7 +132,43 @@ to_string($message.gl2_source_input) == "{{ inputs.windows_beats.id }}"
 
 Prefer content/field-based rules over input-specific rules when possible.
 
-## Change workflow
+## Base configuration workflow
+
+Base configuration lives in `preset/base-config.yaml` and is managed by `graylog_baseconfig.py`. Use it for:
+
+- index sets: retention, rotation/data tiering, shard/replica counts, index prefixes
+- streams: archive/default/short stream definitions and index-set assignments
+- inputs: Syslog TCP/UDP, Beats/Windows, GELF TCP listener configuration
+
+Recommended deployment order on a new Graylog server:
+
+```bash
+./graylog_baseconfig.py apply \
+  -c preset/base-config.yaml \
+  --api-uri https://graylog.example.com/api
+
+./graylog_audit2archive.py apply \
+  -c preset/audit2archive-preset.yaml \
+  --api-uri https://graylog.example.com/api
+```
+
+Base-config maintenance loop:
+
+```bash
+./graylog_baseconfig.py plan   -c preset/base-config.yaml --api-uri https://graylog.example.com/api
+./graylog_baseconfig.py apply  -c preset/base-config.yaml --api-uri https://graylog.example.com/api
+./graylog_baseconfig.py verify -c preset/base-config.yaml --api-uri https://graylog.example.com/api
+```
+
+`Default Stream` is a builtin reference in the preset. The importer skips creating it, but uses it to document and verify the source-stream/index-set relation. Non-builtin streams resolve their `index_set` by title at apply time.
+
+Be careful with inputs:
+
+- Ports below 1024, such as Syslog TCP/UDP 514, may require Graylog/container/runtime privileges.
+- Do not commit input TLS passwords, tokens, or secrets. Export sanitises password-like fields.
+- Changing an input port or title can require matching changes in `ansible.log_forwarder` inventory/defaults.
+
+## Rule change workflow
 
 ### 1. Inspect current state
 

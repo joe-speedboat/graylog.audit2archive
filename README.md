@@ -150,7 +150,54 @@ Recommended token mode:
 export GRAYLOG_TOKEN='your-graylog-api-token'
 ```
 
-The tool sends Graylog API tokens using Basic auth as `TOKEN:token`.
+The tools send Graylog API tokens using Basic auth as `TOKEN:token`.
+
+### Create a Graylog API token from the CLI
+
+Graylog 7's token endpoint takes the **Graylog user id**, not the login name. Do not use `/api/users/admin/tokens/...` directly: on Graylog 7 this can fail with:
+
+```json
+{"type":"ApiError","message":"state should be: hexString has 24 characters"}
+```
+
+Resolve the user id first, then create the token:
+
+```bash
+GRAYLOG_URL="https://graylog.example.com"
+GRAYLOG_USER="admin"
+GRAYLOG_PASS='CHANGE_ME'
+TOKEN_NAME="audit2archive"
+
+USER_ID=$(curl -sk \
+  -u "${GRAYLOG_USER}:${GRAYLOG_PASS}" \
+  -H "X-Requested-By: cli" \
+  "${GRAYLOG_URL}/api/users?per_page=100" \
+  | GRAYLOG_USER="${GRAYLOG_USER}" python3 -c 'import json,os,sys; data=json.load(sys.stdin); users=data.get("users", data if isinstance(data, list) else []); wanted=os.environ["GRAYLOG_USER"]; print(next(u["id"] for u in users if u.get("username") == wanted))')
+
+curl -sk \
+  -u "${GRAYLOG_USER}:${GRAYLOG_PASS}" \
+  -H "X-Requested-By: cli" \
+  -H "Content-Type: application/json" \
+  -X POST \
+  "${GRAYLOG_URL}/api/users/${USER_ID}/tokens/${TOKEN_NAME}"
+```
+
+The response contains the token. Save it immediately; Graylog only shows the token value on creation.
+
+Use it with the tools:
+
+```bash
+export GRAYLOG_TOKEN='the-token-value'
+
+./graylog_baseconfig.py verify \
+  -c preset/base-config.yaml \
+  --api-uri "${GRAYLOG_URL}/api" \
+  --no-verify-tls
+```
+
+If a fresh Graylog 7 install is still in preflight/setup mode, normal user-token endpoints may return `404`. Finish the initial setup first, then create the token.
+
+### Basic auth fallback
 
 For environments that already store a base64-encoded Basic auth value, use:
 
